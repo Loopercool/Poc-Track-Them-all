@@ -5,10 +5,10 @@ using Android.Util;
 using System;
 using System.Net.Http;
 using System.Text;
+using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Maui.Devices.Sensors;
 using Newtonsoft.Json;
-using AndroidX.Core.App;
 using Android.Content.PM;
 
 namespace MyMauiApp.Platforms.Android
@@ -17,29 +17,24 @@ namespace MyMauiApp.Platforms.Android
     public class MyBackgroundService : Service
     {
         private static readonly HttpClient _httpClient = new HttpClient();
+        private CancellationTokenSource _cts = new CancellationTokenSource();
+
         public override IBinder? OnBind(Intent? intent) => null;
 
         public override StartCommandResult OnStartCommand(Intent? intent, StartCommandFlags flags, int startId)
         {
             Log.Debug("MyBackgroundService", "Service started.");
 
-            // Start foreground notification
-            StartForeground(1, new NotificationCompat.Builder(this, "location_service")
-                .SetContentTitle("Tracking Location")
-                .SetContentText("Running in background")
-                .SetSmallIcon(Resource.Drawable.my_custom_icon)
-                .SetOngoing(true)
-                .Build());
+            var notificationHelper = new NotificationHelper(this);
+            StartForeground(1, notificationHelper.BuildNotification());
 
-            // Start location updates
             Task.Run(async () =>
             {
-                while (true)
+                while (!_cts.IsCancellationRequested)
                 {
                     try
                     {
                         var location = await Geolocation.GetLocationAsync(new GeolocationRequest(GeolocationAccuracy.Medium));
-
                         if (location != null)
                         {
                             Log.Debug("MyBackgroundService", $"Location: {location.Latitude}, {location.Longitude}");
@@ -48,12 +43,12 @@ namespace MyMauiApp.Platforms.Android
                     }
                     catch (Exception ex)
                     {
-                        Log.Error("MyBackgroundService", $"Error: {ex.Message}");
+                        Log.Error("MyBackgroundService", $"Error fetching location: {ex.Message}");
                     }
 
-                    await Task.Delay(10000); // Wait 10 sec
+                    await Task.Delay(10000, _cts.Token);
                 }
-            });
+            }, _cts.Token);
 
             return StartCommandResult.Sticky;
         }
@@ -62,14 +57,26 @@ namespace MyMauiApp.Platforms.Android
         {
             try
             {
-                string apiUrl = "https://your-api-url.com/api/location";
-                var json = JsonConvert.SerializeObject(new { Latitude = lat, Longitude = lon, Timestamp = DateTime.UtcNow });
-                var response = await _httpClient.PostAsync(apiUrl, new StringContent(json, Encoding.UTF8, "application/json"));
+                string apiUrl = "http://10.0.2.2:5008/api/locations"; // Emulator: 10.0.2.2, Physical device: your IP
+                var locationRecord = new
+                {
+                    Latitude = lat,
+                    Longitude = lon,
+                    Timestamp = DateTime.UtcNow
+                };
+                var json = JsonConvert.SerializeObject(locationRecord);
+                var content = new StringContent(json, Encoding.UTF8, "application/json");
+                Log.Debug("MyBackgroundService", $"Sending to API: {json}");
+                var response = await _httpClient.PostAsync(apiUrl, content);
 
                 if (response.IsSuccessStatusCode)
-                    Log.Debug("MyBackgroundService", "Location sent!");
+                    Log.Debug("MyBackgroundService", "Location sent successfully!");
                 else
-                    Log.Error("MyBackgroundService", $"API error: {response.StatusCode}");
+                    Log.Error("MyBackgroundService", $"API error: {response.StatusCode} - {await response.Content.ReadAsStringAsync()}");
+            }
+            catch (HttpRequestException ex)
+            {
+                Log.Error("MyBackgroundService", $"API connection error: {ex.Message} - Inner: {ex.InnerException?.Message}");
             }
             catch (Exception ex)
             {
@@ -79,6 +86,7 @@ namespace MyMauiApp.Platforms.Android
 
         public override void OnDestroy()
         {
+            _cts.Cancel();
             Log.Debug("MyBackgroundService", "Service stopped.");
             base.OnDestroy();
         }

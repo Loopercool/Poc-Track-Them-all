@@ -14,7 +14,7 @@ namespace MyMauiApp.Platforms.Android
         {
             base.OnCreate(savedInstanceState);
 
-            // Start the background service.
+            // Start the background service
             var serviceIntent = new Intent(this, typeof(MyBackgroundService));
             if (Build.VERSION.SdkInt >= BuildVersionCodes.O)
                 StartForegroundService(serviceIntent);
